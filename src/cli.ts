@@ -48,11 +48,7 @@ program
   .option('--force-work-scopes', 'Backwards compatibility alias for --org-mode (deprecated)')
   .option('--toon', '(experimental) Enable TOON output format for 30-60% token reduction')
   .option('--discovery', 'Enable runtime tool discovery and loading (experimental feature)')
-  .option('--cloud <type>', 'Microsoft cloud environment: global (default) or china (21Vianet)')
-  .option(
-    '--enable-dynamic-registration',
-    'Enable OAuth Dynamic Client Registration endpoint (required for some MCP clients like Open WebUI)'
-  );
+  .option('--cloud <type>', 'Microsoft cloud environment: global (default) or china (21Vianet)');
 
 export interface CommandOptions {
   v?: boolean;
@@ -74,7 +70,6 @@ export interface CommandOptions {
   toon?: boolean;
   discovery?: boolean;
   cloud?: string;
-  enableDynamicRegistration?: boolean;
 
   [key: string]: unknown;
 }

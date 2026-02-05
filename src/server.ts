@@ -1,14 +1,12 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import express, { Request, Response } from 'express';
 import logger, { enableConsoleLogging } from './logger.js';
 import { registerAuthTools } from './auth-tools.js';
 import { registerGraphTools, registerDiscoveryTools } from './graph-tools.js';
 import GraphClient from './graph-client.js';
 import AuthManager, { buildScopesFromEndpoints } from './auth.js';
-import { MicrosoftOAuthProvider } from './oauth-provider.js';
 import {
   exchangeCodeForToken,
   microsoftBearerTokenAuthMiddleware,
@@ -143,8 +141,6 @@ class MicrosoftGraphServer {
         next();
       });
 
-      const oauthProvider = new MicrosoftOAuthProvider(this.authManager, this.secrets!);
-
       // OAuth Authorization Server Discovery
       app.get('/.well-known/oauth-authorization-server', async (req, res) => {
         const protocol = req.secure ? 'https' : 'http';
@@ -163,10 +159,6 @@ class MicrosoftGraphServer {
           code_challenge_methods_supported: ['S256'],
           scopes_supported: scopes,
         };
-
-        if (this.options.enableDynamicRegistration) {
-          metadata.registration_endpoint = `${url.origin}/register`;
-        }
 
         res.json(metadata);
       });
@@ -187,31 +179,22 @@ class MicrosoftGraphServer {
         });
       });
 
-      if (this.options.enableDynamicRegistration) {
-        app.post('/register', async (req, res) => {
-          const body = req.body;
-          logger.info('Client registration request', { body });
-
-          const clientId = `mcp-client-${Date.now()}`;
-
-          res.status(201).json({
-            client_id: clientId,
-            client_id_issued_at: Math.floor(Date.now() / 1000),
-            redirect_uris: body.redirect_uris || [],
-            grant_types: body.grant_types || ['authorization_code', 'refresh_token'],
-            response_types: body.response_types || ['code'],
-            token_endpoint_auth_method: body.token_endpoint_auth_method || 'none',
-            client_name: body.client_name || 'MCP Client',
-          });
-        });
-      }
-
       // Authorization endpoint - redirects to Microsoft
       app.get('/authorize', async (req, res) => {
         const url = new URL(req.url!, `${req.protocol}://${req.get('host')}`);
+
+        // Use client_id from request (MCP client provides this)
+        const clientId = url.searchParams.get('client_id');
+        if (!clientId) {
+          res.status(400).json({
+            error: 'invalid_request',
+            error_description: 'client_id parameter is required',
+          });
+          return;
+        }
+
         const tenantId = this.secrets?.tenantId || 'common';
-        const clientId = this.secrets!.clientId;
-        const cloudEndpoints = getCloudEndpoints(this.secrets!.cloudType);
+        const cloudEndpoints = getCloudEndpoints(this.secrets?.cloudType || 'global');
         const microsoftAuthUrl = new URL(
           `${cloudEndpoints.authority}/${tenantId}/oauth2/v2.0/authorize`
         );
@@ -237,7 +220,7 @@ class MicrosoftGraphServer {
           }
         });
 
-        // Use our Microsoft app's client_id
+        // Set client_id from request
         microsoftAuthUrl.searchParams.set('client_id', clientId);
 
         // Ensure we have the minimal required scopes if none provided
@@ -283,8 +266,17 @@ class MicrosoftGraphServer {
 
           if (body.grant_type === 'authorization_code') {
             const tenantId = this.secrets?.tenantId || 'common';
-            const clientId = this.secrets!.clientId;
-            const clientSecret = this.secrets?.clientSecret;
+            // Use client_id and client_secret from request (MCP client provides these)
+            const clientId = body.client_id;
+            const clientSecret = body.client_secret;
+
+            if (!clientId) {
+              res.status(400).json({
+                error: 'invalid_request',
+                error_description: 'client_id parameter is required',
+              });
+              return;
+            }
 
             logger.info('Token endpoint: authorization_code exchange', {
               redirect_uri: body.redirect_uri,
@@ -302,13 +294,22 @@ class MicrosoftGraphServer {
               clientSecret,
               tenantId,
               body.code_verifier as string | undefined,
-              this.secrets!.cloudType
+              this.secrets?.cloudType || 'global'
             );
             res.json(result);
           } else if (body.grant_type === 'refresh_token') {
             const tenantId = this.secrets?.tenantId || 'common';
-            const clientId = this.secrets!.clientId;
-            const clientSecret = this.secrets?.clientSecret;
+            // Use client_id and client_secret from request (MCP client provides these)
+            const clientId = body.client_id;
+            const clientSecret = body.client_secret;
+
+            if (!clientId) {
+              res.status(400).json({
+                error: 'invalid_request',
+                error_description: 'client_id parameter is required',
+              });
+              return;
+            }
 
             // Log whether using public or confidential client
             if (clientSecret) {
@@ -322,7 +323,7 @@ class MicrosoftGraphServer {
               clientId,
               clientSecret,
               tenantId,
-              this.secrets!.cloudType
+              this.secrets?.cloudType || 'global'
             );
             res.json(result);
           } else {
@@ -340,12 +341,13 @@ class MicrosoftGraphServer {
         }
       });
 
-      app.use(
-        mcpAuthRouter({
-          provider: oauthProvider,
-          issuerUrl: new URL(`http://localhost:${port}`),
-        })
-      );
+      // mcpAuthRouter disabled - using custom OAuth endpoints instead
+      // app.use(
+      //   mcpAuthRouter({
+      //     provider: oauthProvider,
+      //     issuerUrl: new URL(`http://localhost:${port}`),
+      //   })
+      // );
 
       // Microsoft Graph MCP endpoints with bearer token auth
       // Handle both GET and POST methods as required by MCP Streamable HTTP specification
