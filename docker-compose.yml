@@ -1,0 +1,12 @@
+services:
+  ms-365-mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${MS365_MCP_PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
