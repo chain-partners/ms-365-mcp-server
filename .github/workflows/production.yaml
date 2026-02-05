@@ -2,7 +2,7 @@ name: Deploy MS-365-MCP-SERVER to EKS
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
 
 env:
   AWS_REGION: ap-northeast-2
