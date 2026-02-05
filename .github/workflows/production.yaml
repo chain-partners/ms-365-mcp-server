@@ -1,0 +1,69 @@
+name: Deploy MS-365-MCP-SERVER to EKS
+
+on:
+  push:
+    branches: [ main ]
+
+env:
+  AWS_REGION: ap-northeast-2
+  EKS_CLUSTER_NAME: mcp-eks-prd
+  NAMESPACE: default
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.MCP_AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: wrks/ms365
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            -f Dockerfile \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            --push \
+            .
+
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.EKS_CLUSTER_NAME }}
+
+      - name: Deploy to EKS
+        env:
+          IMAGE_URI: ${{ steps.build-image.outputs.image }}
+        run: |
+          sed "s|IMAGE_URI_PLACEHOLDER|$IMAGE_URI|g" \
+              manifest/ms365-deploy.yaml | kubectl apply -f -
+
+          kubectl rollout status deployment/ms365-deploy \
+            -n ${{ env.NAMESPACE }} \
+            --timeout=300s
